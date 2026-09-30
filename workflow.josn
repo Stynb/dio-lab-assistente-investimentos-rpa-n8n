@@ -1,0 +1,331 @@
+{
+  "name": "DIO",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "Clientes",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "cc4b7fda-a055-417b-be46-5dbe888d0fa7",
+      "name": "Webhook",
+      "webhookId": "2411664e-cd2a-4c8a-85a9-f22c50f4989a"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2224,
+        -192
+      ],
+      "id": "6849f5ac-8e5a-4db2-82b9-42996510d73a",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "url": "https://digitalinnovationone.github.io/dio-lab-assistente-investimentos-rpa-n8n/data.csv",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        80
+      ],
+      "id": "eba93848-5dfc-40c3-bfdd-cad96e1124d3",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pega o CSV como texto vindo do HTTP Request\nconst csvRaw = $json.data ?? $json.body ?? $json;\n\nconst text = (typeof csvRaw === 'string')\n  ? csvRaw\n  : JSON.stringify(csvRaw);\n\nconst lines = text.split(/\\r?\\n/).map(l => l.trim()).filter(Boolean);\nconst headers = lines[0].split(\",\").map(h => h.trim());\n\nconst investimentos = lines.slice(1).map(line => {\n  const cols = line.split(\",\").map(c => c.trim());\n  const obj = {};\n\n  headers.forEach((h, i) => obj[h] = cols[i] ?? \"\");\n\n  // normaliza mínimo para número\n  obj.minimo = Number(\n    String(obj.minimo).replace(/[^\\d]/g, \"\")\n  ) || 0;\n\n  return obj;\n});\n\nreturn [{ json: { investimentos } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        -16
+      ],
+      "id": "c969f38a-0516-441d-b617-1760fb25b123",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        576,
+        -176
+      ],
+      "id": "2b9345e3-3317-435a-9eec-2d4a6c08c0f7",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Segundo nó Code, executado após o Merge.\n// Entrada esperada:\n// - clientes vindos do Webhook/HTTP Request\n// - investimentos vindos do primeiro Code\n\nconst entrada = $input.first().json;\n\n// ----------------------------------------------------------\n// Funções auxiliares\n// ----------------------------------------------------------\n\nfunction texto(valor) {\n  return String(valor ?? \"\").trim();\n}\n\nfunction normalizar(valor) {\n  return texto(valor)\n    .normalize(\"NFD\")\n    .replace(/[\\u0300-\\u036f]/g, \"\")\n    .toLowerCase();\n}\n\nfunction numero(valor) {\n  if (typeof valor === \"number\") {\n    return Number.isFinite(valor) ? valor : 0;\n  }\n\n  const valorTexto = texto(valor)\n    .replace(/R\\$/gi, \"\")\n    .replace(/\\s/g, \"\")\n    .replace(/\\./g, \"\")\n    .replace(\",\", \".\")\n    .replace(/[^\\d.-]/g, \"\");\n\n  const resultado = Number(valorTexto);\n\n  return Number.isFinite(resultado) ? resultado : 0;\n}\n\nfunction pick(lista) {\n  if (!Array.isArray(lista) || lista.length === 0) {\n    return \"\";\n  }\n\n  return lista[Math.floor(Math.random() * lista.length)];\n}\n\n// ----------------------------------------------------------\n// Recupera clientes e investimentos da saída do Merge\n// ----------------------------------------------------------\n\nconst clientes =\n  entrada.clientes ??\n  entrada.body?.clientes ??\n  entrada.data?.clientes ??\n  entrada.body ??\n  [];\n\nconst investimentos =\n  entrada.investimentos ??\n  entrada.data?.investimentos ??\n  entrada.body?.investimentos ??\n  [];\n\n// ----------------------------------------------------------\n// Valida as entradas\n// ----------------------------------------------------------\n\nif (!Array.isArray(clientes)) {\n  throw new Error(\n    'O campo \"clientes\" não foi encontrado como array na saída do Merge.'\n  );\n}\n\nif (!Array.isArray(investimentos)) {\n  throw new Error(\n    'O campo \"investimentos\" não foi encontrado como array na saída do Merge.'\n  );\n}\n\n// ----------------------------------------------------------\n// Cruza clientes com investimentos\n// ----------------------------------------------------------\n\nconst resultados = clientes.map(c => {\n  const nome = texto(c.nome ?? c.Nome);\n  const email = texto(c.email ?? c.Email);\n  const perfil = texto(c.perfil ?? c.Perfil);\n  const saldoTexto = c.saldo ?? c.Saldo ?? \"0\";\n  const saldoNum = numero(saldoTexto);\n\n  const perfilNormalizado = normalizar(perfil);\n\n  // Investimentos compatíveis com o perfil\n  const compativeis = investimentos.filter(investimento => {\n    return normalizar(\n      investimento.perfil ?? investimento.Perfil\n    ) === perfilNormalizado;\n  });\n\n  // Investimentos cujo valor mínimo cabe no saldo\n  const elegiveis = compativeis.filter(investimento => {\n    return numero(\n      investimento.minimo ??\n      investimento.Minimo ??\n      investimento[\"Mínimo\"] ??\n      investimento.valor_minimo\n    ) <= saldoNum;\n  });\n\n  // Prioriza o maior investimento mínimo que cabe no saldo\n  elegiveis.sort((a, b) => {\n    const minimoA = numero(\n      a.minimo ?? a.Minimo ?? a[\"Mínimo\"] ?? a.valor_minimo\n    );\n\n    const minimoB = numero(\n      b.minimo ?? b.Minimo ?? b[\"Mínimo\"] ?? b.valor_minimo\n    );\n\n    return minimoB - minimoA;\n  });\n\n  const escolhido = elegiveis[0] ?? null;\n\n  let motivo;\n  let mensagens;\n\n  if (escolhido) {\n    const nomeInvestimento = texto(\n      escolhido.investimento ??\n      escolhido.Investimento ??\n      escolhido.nome ??\n      escolhido.Nome ??\n      escolhido.produto ??\n      escolhido.Produto\n    );\n\n    const minimo = numero(\n      escolhido.minimo ??\n      escolhido.Minimo ??\n      escolhido[\"Mínimo\"] ??\n      escolhido.valor_minimo\n    );\n\n    motivo =\n      `${nomeInvestimento} é compatível com o perfil ${perfil} ` +\n      `e possui investimento mínimo de ${minimo.toLocaleString(\"pt-BR\", {\n        style: \"currency\",\n        currency: \"BRL\"\n      })}.`;\n\n    mensagens = [\n      `Olá, ${nome}! Com base no seu perfil ${perfil}, recomendamos ` +\n      `${nomeInvestimento}. Essa opção é compatível com o saldo informado.`,\n\n      `${nome}, encontramos uma oportunidade para seu perfil ${perfil}: ` +\n      `${nomeInvestimento}. O investimento mínimo cabe no seu saldo disponível.`,\n\n      `Olá, ${nome}! A opção ${nomeInvestimento} está alinhada ao seu ` +\n      `perfil ${perfil} e à sua disponibilidade financeira.`\n    ];\n  } else if (compativeis.length > 0) {\n    motivo =\n      `Existem investimentos para o perfil ${perfil}, mas nenhum possui ` +\n      `valor mínimo compatível com o saldo disponível.`;\n\n    mensagens = [\n      `Olá, ${nome}! Encontramos investimentos para o perfil ${perfil}, ` +\n      `mas o saldo atual ainda não alcança o valor mínimo necessário.`,\n\n      `${nome}, seu perfil possui opções disponíveis, porém será necessário ` +\n      `aumentar o saldo para realizar o investimento mínimo.`,\n\n      `Olá, ${nome}! No momento, o saldo informado não é suficiente para ` +\n      `as opções disponíveis para o perfil ${perfil}.`\n    ];\n  } else {\n    motivo =\n      `Não foi encontrado investimento cadastrado para o perfil ${perfil}.`;\n\n    mensagens = [\n      `Olá, ${nome}! Não encontramos uma opção cadastrada para o perfil ${perfil}.`,\n\n      `${nome}, ainda não existe uma recomendação disponível para o perfil ${perfil}.`,\n\n      `Olá, ${nome}! A base atual não contém investimentos compatíveis ` +\n      `com o seu perfil ${perfil}.`\n    ];\n  }\n\n  return {\n    nome,\n    email,\n    perfil,\n    saldo_texto: saldoTexto,\n    saldo_num: saldoNum,\n    recomendacao: escolhido,\n    motivo,\n    mensagens,\n    mensagem_escolhida: pick(mensagens),\n  };\n});\n\n// ----------------------------------------------------------\n// Saída enviada ao Respond to Webhook\n// ----------------------------------------------------------\n\nreturn [{\n  json: {\n    ok: true,\n    total_clientes: resultados.length,\n    total_investimentos: investimentos.length,\n    resultados\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        -96
+      ],
+      "id": "34f0f85a-2724-46dd-b1d6-50bfeca7b7ef",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const resultados = $json.resultados || [];\n\nfunction parseBRL(valor) {\n  if (!valor) return 0;\n\n  const s = String(valor)\n    .replace(\"R$\", \"\")\n    .replace(/\\./g, \"\")\n    .replace(/,/g, \".\")\n    .replace(/[^\\d.-]/g, \"\")\n    .trim();\n\n  const n = Number(s);\n\n  return Number.isFinite(n) ? n : 0;\n}\n\n// retorna UM ITEM por cliente\nconst out = resultados.map(c => {\n  const saldoNum = c.saldo_num ?? parseBRL(c.saldo_texto ?? c.saldo);\n\n  return {\n    json: {\n      email_to: String(c.email || \"\").trim(),\n      nome: String(c.nome || \"\").trim(),\n      perfil: c.perfil,\n      saldo_texto: c.saldo_texto ?? c.saldo,\n      saldo_num: saldoNum,\n      recomendacao: c.recomendacao,\n      motivo: c.motivo,\n      mensagem_base: c.mensagem_escolhida || c.mensagem || \"\",\n      copy_rules: {\n        idioma: \"pt-BR\",\n        tom: \"amigável e profissional\",\n        tamanho: \"curto (4-6 linhas)\",\n        evitar: [\n          \"promessas de ganho\",\n          \"garantias\",\n          \"linguagem agressiva\"\n        ]\n      },\n    },\n  };\n});\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        -96
+      ],
+      "id": "5f87f0bc-2385-456f-9658-d230d31c4c8a",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "Escreva um e-mail curto em pt-BR para o cliente abaixo, sem prometer ganhos e sem garantias.\n\nCliente:\nNome: Ana Silva\nPerfil: Conservador\nSaldo: R$ 12.500,00\n\nRecomendação:\nProduto: CDB Liquidez Diária\nMínimo: 1000\nRentabilidade: 12.5%\nMotivo: saldo_ok\n\nRetorne APENAS JSON com:\n{\n  \"subject\": \"...\",\n  \"text_body\": \"...\",\n  \"html_body\": \"...\"\n}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        1280,
+        -224
+      ],
+      "id": "1549fb4f-13ed-42a2-82f2-815104bf65cb",
+      "name": "Message a model"
+    },
+    {
+      "parameters": {
+        "jsCode": "const respostasIA = $input.all();\nconst dadosOriginais = $(\"Code in JavaScript2\").all();\n\nfunction removerMarkdown(texto) {\n  return String(texto ?? \"\")\n    .trim()\n    .replace(/^```(?:json)?\\s*/i, \"\")\n    .replace(/\\s*```$/i, \"\")\n    .trim();\n}\n\nfunction extrairResposta(item) {\n  return (\n    item.json?.output?.[0]?.content?.[0]?.text ??\n    item.json?.content?.[0]?.text ??\n    item.json?.output_text ??\n    item.json?.text ??\n    \"\"\n  );\n}\n\nfunction converterJSON(texto) {\n  const limpo = removerMarkdown(texto);\n\n  try {\n    return JSON.parse(limpo);\n  } catch {\n    const inicio = limpo.indexOf(\"{\");\n    const fim = limpo.lastIndexOf(\"}\");\n\n    if (inicio >= 0 && fim > inicio) {\n      try {\n        return JSON.parse(limpo.slice(inicio, fim + 1));\n      } catch {\n        return {};\n      }\n    }\n\n    return {};\n  }\n}\n\nconst out = respostasIA.map((item, index) => {\n  const j = dadosOriginais[index]?.json ?? {};\n  const resposta = converterJSON(extrairResposta(item));\n\n  const to = String(j.email_to ?? j.email ?? \"\").trim();\n  const subject = String(resposta.subject ?? \"\").trim();\n  const text_body = String(resposta.text_body ?? \"\").trim();\n  const html_body = String(resposta.html_body ?? \"\").trim();\n\n  return {\n    json: {\n      ok: true,\n      to,\n      subject,\n      text_body,\n      html_body,\n\n      // (opcional) manter alguns campos úteis pra debug/aula\n      meta: {\n        nome: j.nome,\n        perfil: j.perfil,\n        produto: j.recomendacao?.produto,\n        minimo: j.recomendacao?.minimo,\n        rentabilidade: j.recomendacao?.rentabilidade,\n        motivo: j.motivo\n      }\n    }\n  };\n});\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1648,
+        -196
+      ],
+      "id": "2155574f-4fec-4511-abe7-334a223e6b00",
+      "name": "Code in JavaScript3"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{$json.html_body}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2048,
+        -208
+      ],
+      "id": "c9d191d7-23a3-490a-9995-5f861c5b7999",
+      "name": "Send a message",
+      "webhookId": "fb6d0772-7f17-44cb-b9e9-42281ee4788a"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "96d432a5-711d-43bd-9a12-17e6de52139a",
+              "leftValue": "={{ $json.to }}",
+              "rightValue": "/^```(?:\\s)*|```(?:\\s)*$/g",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1872,
+        -192
+      ],
+      "id": "ef8e663b-0d8c-4873-8bf7-8837cdbd76cc",
+      "name": "If"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to Webhook": {
+      "main": [
+        []
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript3": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "943f99b0-9873-45e7-a4af-31745a10c4d4",
+  "meta": {
+    "instanceId": "ea95723c1d467a76988bb1b1c6e49a94a87622bdd1b08ba8650bfc65c20a0c39"
+  },
+  "nodeGroups": [],
+  "id": "mVf6iwmx7xNGdH0f",
+  "tags": []
+}
